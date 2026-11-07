@@ -36,7 +36,7 @@ FH3Mod* g_mod          = nullptr;
 
 bool g_verbose       = false;  // LiveryMod.ini [LiveryMod] Log=1
 bool g_premultiplied = false;  // LiveryMod.ini [LiveryMod] Premultiplied=1: store the colour multiplied by alpha
-int g_max_size       = 1024;   // LiveryMod.ini [LiveryMod] MaxSize: 256, 512 or 1024, the biggest texture a decal gets
+int g_max_size       = 1024;   // LiveryMod.ini [LiveryMod] Size: 256, 512 or 1024, the texture size of every decal
 
 constexpr uint32_t kIdBase  = 10000;  // our ids are kIdBase .. kIdBase + kIdRange - 1 (the game's own end at 3023)
 constexpr uint32_t kIdRange = 50000;
@@ -115,15 +115,15 @@ void load_config() {
                        "Log=0\r\n"
                        "; 1 = store the colours multiplied by alpha (try it if the decals show dark or light edges in the game)\r\n"
                        "Premultiplied=0\r\n"
-                       "; the biggest texture a decal gets: 256, 512 or 1024 (a PNG gets the smallest of these that holds it; 256 is what the game's own decals use)\r\n"
-                       "MaxSize=1024\r\n",
+                       "; the texture size of every decal: 256, 512 or 1024 (every PNG is fitted into it; 256 is what the game's own decals use)\r\n"
+                       "Size=1024\r\n",
                        f);
             std::fclose(f);
         }
     }
     g_verbose       = GetPrivateProfileIntW(L"LiveryMod", L"Log", 0, p.c_str()) != 0;
     g_premultiplied = GetPrivateProfileIntW(L"LiveryMod", L"Premultiplied", 0, p.c_str()) != 0;
-    const int ms    = GetPrivateProfileIntW(L"LiveryMod", L"MaxSize", 1024, p.c_str());
+    const int ms    = GetPrivateProfileIntW(L"LiveryMod", L"Size", 1024, p.c_str());
     g_max_size      = ms >= 1024 ? 1024 : ms >= 512 ? 512 : 256;
 }
 
@@ -180,8 +180,7 @@ void install() {
         std::snprintf(n8, sizeof n8, "lm%06u", d.id);
         d.name8 = n8;
 
-        int size = 256;  // the smallest of 256 / 512 / 1024 that holds the picture, at most MaxSize
-        while (size < g_max_size && size < std::max(w, hgt)) size *= 2;
+        const int size = g_max_size;  // every decal gets the same texture size; a smaller picture is scaled up to it
         const std::vector<uint8_t> tex = swatch::make_swatchbin(px, w, hgt, g_premultiplied, size);
         stbi_image_free(px);
         const std::vector<uint8_t> mdl = swatch::make_modelbin(d.name8);

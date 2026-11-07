@@ -13,11 +13,11 @@ and its decal is gone from the menu on the next start.
 ## Pictures
 
 - Any PNG, any size. It is fitted into a square texture keeping its proportions, centred, with a transparent border (the way the game's own
-  wide logos sit in theirs). The texture is 256, 512 or 1024 pixels: the smallest that holds your picture, at most `MaxSize` (default 1024).
+  wide logos sit in theirs). Every decal's texture is 1024 x 1024 pixels (`Size` in the ini); a smaller picture is scaled up to fit.
   Transparency is kept.
 - A decal's id comes from its file name. Keep the name and the decal keeps its id, so liveries that use it keep working; rename the file
   and it becomes a different decal. Don't remove a PNG that a saved livery still uses.
-- `fh3-mods\LiveryMod.ini`: `MaxSize=256` gives the game's own size (use it if a big decal ever misbehaves); `Log=1` writes which PNG became which decal to `platform.log`; `Premultiplied=1` stores colours multiplied by
+- `fh3-mods\LiveryMod.ini`: `Size=256` gives the game's own size (use it if a big decal ever misbehaves); `Log=1` writes which PNG became which decal to `platform.log`; `Premultiplied=1` stores colours multiplied by
   alpha (try it if edges look dark or light in the game).
 
 ## Build
