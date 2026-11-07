@@ -5,7 +5,7 @@
 //
 // How: the decal menu is built from the game database. Livery_Decals lists the decals (a .modelbin each), and
 // Livery_DecalsSortOrder gives every manufacturer its own order of them. For each PNG this mod
-//  - makes a .swatchbin texture (the picture fitted into 256x256, BC7 with mips, in the console's tiled layout) and a
+//  - makes a .swatchbin texture (the picture fitted into a 256, 512 or 1024 square, BC7 with mips, in the console's tiled layout) and a
 //    .modelbin (the game's square decal quad, pointing at that texture) and hands both to the game with set_file, as
 //    media\livery\Decals.zip\Textures\<name>.swatchbin and media\livery\Decals.zip\<name>.modelbin,
 //  - adds a Livery_Decals row, and a Livery_DecalsSortOrder row for every manufacturer, after the game's own decals.
@@ -36,6 +36,7 @@ FH3Mod* g_mod          = nullptr;
 
 bool g_verbose       = false;  // LiveryMod.ini [LiveryMod] Log=1
 bool g_premultiplied = false;  // LiveryMod.ini [LiveryMod] Premultiplied=1: store the colour multiplied by alpha
+int g_max_size       = 1024;   // LiveryMod.ini [LiveryMod] MaxSize: 256, 512 or 1024, the biggest texture a decal gets
 
 constexpr uint32_t kIdBase  = 10000;  // our ids are kIdBase .. kIdBase + kIdRange - 1 (the game's own end at 3023)
 constexpr uint32_t kIdRange = 50000;
@@ -113,13 +114,17 @@ void load_config() {
                        "; 1 = write more to platform.log (which PNG became which decal)\r\n"
                        "Log=0\r\n"
                        "; 1 = store the colours multiplied by alpha (try it if the decals show dark or light edges in the game)\r\n"
-                       "Premultiplied=0\r\n",
+                       "Premultiplied=0\r\n"
+                       "; the biggest texture a decal gets: 256, 512 or 1024 (a PNG gets the smallest of these that holds it; 256 is what the game's own decals use)\r\n"
+                       "MaxSize=1024\r\n",
                        f);
             std::fclose(f);
         }
     }
     g_verbose       = GetPrivateProfileIntW(L"LiveryMod", L"Log", 0, p.c_str()) != 0;
     g_premultiplied = GetPrivateProfileIntW(L"LiveryMod", L"Premultiplied", 0, p.c_str()) != 0;
+    const int ms    = GetPrivateProfileIntW(L"LiveryMod", L"MaxSize", 1024, p.c_str());
+    g_max_size      = ms >= 1024 ? 1024 : ms >= 512 ? 512 : 256;
 }
 
 struct Decal {
@@ -175,7 +180,9 @@ void install() {
         std::snprintf(n8, sizeof n8, "lm%06u", d.id);
         d.name8 = n8;
 
-        const std::vector<uint8_t> tex = swatch::make_swatchbin(px, w, hgt, g_premultiplied);
+        int size = 256;  // the smallest of 256 / 512 / 1024 that holds the picture, at most MaxSize
+        while (size < g_max_size && size < std::max(w, hgt)) size *= 2;
+        const std::vector<uint8_t> tex = swatch::make_swatchbin(px, w, hgt, g_premultiplied, size);
         stbi_image_free(px);
         const std::vector<uint8_t> mdl = swatch::make_modelbin(d.name8);
         const std::string tex_path = "livery/Decals/Textures/" + d.name8 + ".swatchbin";
@@ -194,7 +201,7 @@ void install() {
                       kSeqBase + seq, d.id, kSeqBase);
         sql += row;
         ++ok;
-        if (g_verbose) say("%s.png (%dx%d) -> decal %u (%s)", d.stem.c_str(), w, hgt, d.id, d.name8.c_str());
+        if (g_verbose) say("%s.png (%dx%d) -> decal %u (%s), texture %d", d.stem.c_str(), w, hgt, d.id, d.name8.c_str(), size);
     }
     if (!sql.empty()) g_api->add_sql(g_mod, sql.c_str());
     say("%d decal(s) from fh3-mods\\liverymod", ok);

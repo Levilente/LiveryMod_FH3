@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "modelbin_template.h"
@@ -13,8 +14,7 @@
 
 namespace swatch {
 
-constexpr int kSize = 256;
-constexpr int kMips = 9;
+constexpr int kBaseSize = 256;  // the size the game's own decals have (and the header template in swatch_header.h)
 
 struct Rgba {
     float r, g, b, a;  // 0..255, straight alpha
@@ -22,11 +22,11 @@ struct Rgba {
 
 // ---- picture to 256x256 ------------------------------------------------------------------------------------------
 
-// Fits `src` (w*h RGBA8, straight alpha, any size) into 256x256 keeping its proportions, centred on a transparent
+// Fits `src` (w*h RGBA8, straight alpha, any size) into kSize x kSize keeping its proportions, centred on a transparent
 // canvas, the way the game's own wide logos sit in their square textures. Resampling is done on premultiplied colour
 // (a box filter when shrinking, bilinear when growing), so edges don't pick up the colour of transparent pixels.
-inline std::vector<Rgba> fit_to_square(const uint8_t* src, int w, int h) {
-    std::vector<Rgba> out(kSize * kSize, Rgba{0, 0, 0, 0});
+inline std::vector<Rgba> fit_to_square(const uint8_t* src, int w, int h, int kSize) {
+    std::vector<Rgba> out(size_t(kSize) * kSize, Rgba{0, 0, 0, 0});
     if (w <= 0 || h <= 0) return out;
     const double s = std::min(double(kSize) / w, double(kSize) / h);
     const int dw = std::max(1, std::min(kSize, int(std::lround(w * s))));
@@ -271,34 +271,56 @@ inline void encode_level(const std::vector<Rgba>& img, int size, std::vector<uin
     const int bw = std::max(1, size / 4), bwp = (bw + 7) / 8 * 8;
     const size_t base = out.size();
     out.resize(base + size_t(bwp) * bwp * 16, 0);
-    for (int by = 0; by < bw; ++by)
-        for (int bx = 0; bx < bw; ++bx) {
-            Rgba blk[16];
-            for (int j = 0; j < 4; ++j)
-                for (int i = 0; i < 4; ++i) {
-                    const int x = std::min(size - 1, bx * 4 + i), y = std::min(size - 1, by * 4 + j);
-                    blk[j * 4 + i] = img[size_t(y) * size + x];
-                }
-            const int lx = bx & 7, ly = by & 7;
-            const int m = (lx & 1) | ((ly & 1) << 1) | (((lx >> 1) & 1) << 2) | (((ly >> 1) & 1) << 3) | (((lx >> 2) & 1) << 4) | (((ly >> 2) & 1) << 5);
-            const size_t tile = size_t(by >> 3) * (bwp >> 3) + (bx >> 3);
-            encode_block(blk, out.data() + base + (tile * 64 + m) * 16);
-        }
+    auto rows = [&](int y0, int y1) {
+        for (int by = y0; by < y1; ++by)
+            for (int bx = 0; bx < bw; ++bx) {
+                Rgba blk[16];
+                for (int j = 0; j < 4; ++j)
+                    for (int i = 0; i < 4; ++i) {
+                        const int x = std::min(size - 1, bx * 4 + i), y = std::min(size - 1, by * 4 + j);
+                        blk[j * 4 + i] = img[size_t(y) * size + x];
+                    }
+                const int lx = bx & 7, ly = by & 7;
+                const int m = (lx & 1) | ((ly & 1) << 1) | (((lx >> 1) & 1) << 2) | (((ly >> 1) & 1) << 3) | (((lx >> 2) & 1) << 4) | (((ly >> 2) & 1) << 5);
+                const size_t tile = size_t(by >> 3) * (bwp >> 3) + (bx >> 3);
+                encode_block(blk, out.data() + base + (tile * 64 + m) * 16);
+            }
+    };
+    unsigned nt = std::thread::hardware_concurrency();
+    nt = std::clamp(nt, 1u, 8u);
+    if (bw < 32 || nt == 1) { rows(0, bw); return; }
+    std::vector<std::thread> th;
+    const int step = (bw + int(nt) - 1) / int(nt);
+    for (int y0 = 0; y0 < bw; y0 += step) th.emplace_back(rows, y0, std::min(bw, y0 + step));
+    for (auto& t : th) t.join();
 }
 
-// `rgba`: w*h pixels, straight alpha, any size. Returns the whole .swatchbin (87 + 92160 bytes).
-inline std::vector<uint8_t> make_swatchbin(const uint8_t* rgba, int w, int h, bool premultiplied_output) {
-    std::vector<Rgba> level = fit_to_square(rgba, w, h);
-    bleed_colour(level, kSize);
+// `rgba`: w*h pixels, straight alpha, any size. `size`: 256, 512 or 1024 (the texture's width and height). Returns the whole
+// .swatchbin: the game's 87-byte header with the size, the mip count and the lengths changed, then every mip level.
+inline std::vector<uint8_t> make_swatchbin(const uint8_t* rgba, int w, int h, bool premultiplied_output, int size) {
+    int mips = 1;
+    for (int s = size; s > 1; s >>= 1) ++mips;       // 256 -> 9, 512 -> 10, 1024 -> 11
+    std::vector<Rgba> level = fit_to_square(rgba, w, h, size);
+    bleed_colour(level, size);
     std::vector<uint8_t> out(k_swatch_hdr, k_swatch_hdr + sizeof k_swatch_hdr);
-    int size = kSize;
-    for (int m = 0; m < kMips; ++m) {
+    int cur = size;
+    for (int m = 0; m < mips; ++m) {
         std::vector<Rgba> enc = level;
         if (premultiplied_output)
             for (Rgba& p : enc) { const float a = p.a / 255.0f; p.r *= a; p.g *= a; p.b *= a; }
-        encode_level(enc, size, out);
-        if (m + 1 < kMips) { level = down(level, size); size = std::max(1, size / 2); }
+        encode_level(enc, cur, out);
+        if (m + 1 < mips) { level = down(level, cur); cur = std::max(1, cur / 2); }
     }
+    const uint32_t total = uint32_t(out.size()), data = total - uint32_t(sizeof k_swatch_hdr);
+    auto put32 = [&](size_t at, uint32_t v) { std::memcpy(out.data() + at, &v, 4); };
+    auto put16 = [&](size_t at, uint16_t v) { std::memcpy(out.data() + at, &v, 2); };
+    put32(12, total);
+    put32(36, data);
+    put32(40, data);
+    put16(68, uint16_t(size)); put16(70, uint16_t(size));  // width, height
+    put16(74, uint16_t(size)); put16(76, uint16_t(size));  // the same again (the surface's)
+    out[80] = uint8_t(mips);
+    out[81] = uint8_t(mips);
     return out;
 }
 
