@@ -6,7 +6,7 @@ and its decal is gone from the menu on the next start.
 
 ## Install
 
-1. Install the FH3 Mod Platform (1.0.0 or newer).
+1. Install the FH3 Mod Platform (**1.2.0 or newer**).
 2. Copy `LiveryMod.dll` into `fh3-mods` next to `azimuth.exe`.
 3. Start the game once: the mod makes `fh3-mods\liverymod`. Put your PNGs in it and restart the game.
 

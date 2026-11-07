@@ -203,7 +203,7 @@ void install() {
         if (g_verbose) say("%s.png (%dx%d) -> decal %u (%s), texture %d", d.stem.c_str(), w, hgt, d.id, d.name8.c_str(), size);
     }
     if (!sql.empty()) g_api->add_sql(g_mod, sql.c_str());
-    say("%d decal(s) from fh3-mods\\liverymod", ok);
+    if (g_verbose) say("%d decal(s) from fh3-mods\\liverymod", ok);
 }
 
 }  // namespace
@@ -216,9 +216,9 @@ FH3MOD_EXPORT int fh3mod_init(const FH3ModApi* api) {
     info.size             = sizeof info;
     info.name             = "Livery Decals";
     info.version          = LIVERYMOD_VERSION;
-    info.github_repo      = nullptr;
+    info.github_repo      = "Levilente/LiveryMod_FH3";
     info.platform_version = FH3MOD_PLATFORM_VERSION;
-    info.check_updates    = 0;
+    info.check_updates    = 1;
     info.description      = "Every PNG in fh3-mods\\liverymod becomes a new decal in the livery editor (Apply a Manufacturer Decal).";
     g_mod                 = api->register_mod(&info);
     if (!g_mod) return 1;

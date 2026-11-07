@@ -1,6 +1,7 @@
 # Changelog
 
 ## 1.2.0
+- The platform's update check knows this repository (MODS > Updates, start-up notice). Needs FH3 Mod Platform 1.2.0 or newer.
 - Every decal gets a 1024 x 1024 texture (`Size` in `LiveryMod.ini`: 256, 512 or 1024, default 1024); smaller pictures are scaled up to it.
 
 ## 1.1.0
