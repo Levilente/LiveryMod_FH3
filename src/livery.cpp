@@ -23,6 +23,8 @@
 #include "swatch.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -160,18 +162,12 @@ void install() {
         list.resize(kMaxDecals);
     }
 
+    // The ids come from the names, so they are settled first (in order); the slow part (reading the
+    // PNG and building the textures) then runs on several threads, a chunk at a time, and the
+    // results are handed to the platform one after another. Hundreds of decals start in seconds,
+    // and the mods that load after this one are not kept waiting.
     std::vector<bool> used(kIdRange, false);
-    std::string sql;
-    int ok = 0, seq = 0;
     for (Decal& d : list) {
-        std::vector<uint8_t> bytes;
-        if (!read_file(dir + L"\\" + d.file, bytes)) { say("%s: can't read it (empty, too big, or open in another program)", d.stem.c_str()); continue; }
-        int w = 0, hgt = 0, comp = 0;
-        stbi_uc* px = stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &hgt, &comp, 4);
-        if (!px) { say("%s.png: not a PNG the mod can read (%s)", d.stem.c_str(), stbi_failure_reason()); continue; }
-        if (w <= 0 || hgt <= 0 || w > 32768 || hgt > 32768) { stbi_image_free(px); say("%s.png: %dx%d is outside what the mod accepts", d.stem.c_str(), w, hgt); continue; }
-
-        // the id comes from the name: stable across starts and across adding / removing other PNGs
         uint32_t slot = fnv1a(lower(d.file)) % kIdRange;
         while (used[slot]) slot = (slot + 1) % kIdRange;
         used[slot] = true;
@@ -179,28 +175,71 @@ void install() {
         char n8[16];
         std::snprintf(n8, sizeof n8, "lm%06u", d.id);
         d.name8 = n8;
+    }
 
-        const int size = g_max_size;  // every decal gets the same texture size; a smaller picture is scaled up to it
-        const std::vector<uint8_t> tex = swatch::make_swatchbin(px, w, hgt, g_premultiplied, size);
+    struct Built {
+        bool ok = false;
+        std::string err;
+        int w = 0, h = 0;
+        std::vector<uint8_t> tex, mdl;
+    };
+    const int size = g_max_size;  // every decal gets the same texture size; a smaller picture is scaled up to it
+    auto build = [&](const Decal& d, Built& r) {
+        std::vector<uint8_t> bytes;
+        if (!read_file(dir + L"\\" + d.file, bytes)) { r.err = d.stem + ": can't read it (empty, too big, or open in another program)"; return; }
+        int w = 0, hgt = 0, comp = 0;
+        stbi_uc* px = stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &hgt, &comp, 4);
+        if (!px) { r.err = d.stem + std::string(".png: not a PNG the mod can read (") + stbi_failure_reason() + ")"; return; }
+        if (w <= 0 || hgt <= 0 || w > 32768 || hgt > 32768) {
+            stbi_image_free(px);
+            r.err = d.stem + ".png: " + std::to_string(w) + "x" + std::to_string(hgt) + " is outside what the mod accepts";
+            return;
+        }
+        r.tex = swatch::make_swatchbin(px, w, hgt, g_premultiplied, size);
         stbi_image_free(px);
-        const std::vector<uint8_t> mdl = swatch::make_modelbin(d.name8);
-        const std::string tex_path = "livery/Decals/Textures/" + d.name8 + ".swatchbin";
-        const std::string mdl_path = "livery/Decals/" + d.name8 + ".modelbin";
-        const int a = g_api->set_file(g_mod, tex_path.c_str(), tex.data(), tex.size());
-        const int b = g_api->set_file(g_mod, mdl_path.c_str(), mdl.data(), mdl.size());
-        if (!a || !b) { say("%s.png: the game files couldn't be written (see the lines above)", d.stem.c_str()); continue; }
+        r.mdl = swatch::make_modelbin(d.name8);
+        r.w = w, r.h = hgt, r.ok = true;
+    };
 
-        ++seq;
-        char row[640];
-        std::snprintf(row, sizeof row, "INSERT INTO Livery_Decals (ID, Filename, DisplayName, AlphaSort) VALUES (%u, 'GAME:\\Media\\Livery\\Decals\\%s.modelbin', %s, %s);\n",
-                      d.id, d.name8.c_str(), sql_text(d.stem).c_str(), sql_text(d.stem).c_str());
-        sql += row;
-        std::snprintf(row, sizeof row,
-                      "INSERT INTO Livery_DecalsSortOrder (MakeID, Sequence, Livery_DecalID) SELECT DISTINCT MakeID, %d, %u FROM Livery_DecalsSortOrder WHERE Sequence < %d;\n",
-                      kSeqBase + seq, d.id, kSeqBase);
-        sql += row;
-        ++ok;
-        if (g_verbose) say("%s.png (%dx%d) -> decal %u (%s), texture %d", d.stem.c_str(), w, hgt, d.id, d.name8.c_str(), size);
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    const size_t workers = std::max<size_t>(1, std::min<size_t>(8, si.dwNumberOfProcessors));
+    const size_t chunk   = workers * 3;
+
+    std::string sql;
+    int ok = 0, seq = 0;
+    for (size_t base = 0; base < list.size(); base += chunk) {
+        const size_t n = std::min(chunk, list.size() - base);
+        std::vector<Built> out(n);
+        std::atomic<size_t> next{0};
+        std::vector<std::thread> pool;
+        for (size_t t = 1; t < std::min(workers, n); ++t)
+            pool.emplace_back([&] { for (size_t i; (i = next.fetch_add(1)) < n;) build(list[base + i], out[i]); });
+        for (size_t i; (i = next.fetch_add(1)) < n;) build(list[base + i], out[i]);
+        for (auto& t : pool) t.join();
+
+        for (size_t i = 0; i < n; ++i) {
+            const Decal& d = list[base + i];
+            Built& r       = out[i];
+            if (!r.ok) { say("%s", r.err.c_str()); continue; }
+            const std::string tex_path = "livery/Decals/Textures/" + d.name8 + ".swatchbin";
+            const std::string mdl_path = "livery/Decals/" + d.name8 + ".modelbin";
+            const int a = g_api->set_file(g_mod, tex_path.c_str(), r.tex.data(), r.tex.size());
+            const int b = g_api->set_file(g_mod, mdl_path.c_str(), r.mdl.data(), r.mdl.size());
+            if (!a || !b) { say("%s.png: the game files couldn't be written (see the lines above)", d.stem.c_str()); continue; }
+
+            ++seq;
+            char row[640];
+            std::snprintf(row, sizeof row, "INSERT INTO Livery_Decals (ID, Filename, DisplayName, AlphaSort) VALUES (%u, 'GAME:\\Media\\Livery\\Decals\\%s.modelbin', %s, %s);\n",
+                          d.id, d.name8.c_str(), sql_text(d.stem).c_str(), sql_text(d.stem).c_str());
+            sql += row;
+            std::snprintf(row, sizeof row,
+                          "INSERT INTO Livery_DecalsSortOrder (MakeID, Sequence, Livery_DecalID) SELECT DISTINCT MakeID, %d, %u FROM Livery_DecalsSortOrder WHERE Sequence < %d;\n",
+                          kSeqBase + seq, d.id, kSeqBase);
+            sql += row;
+            ++ok;
+            if (g_verbose) say("%s.png (%dx%d) -> decal %u (%s), texture %d", d.stem.c_str(), r.w, r.h, d.id, d.name8.c_str(), size);
+        }
     }
     if (!sql.empty()) g_api->add_sql(g_mod, sql.c_str());
     if (g_verbose) say("%d decal(s) from fh3-mods\\liverymod", ok);
