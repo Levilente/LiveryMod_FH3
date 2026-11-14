@@ -42,6 +42,7 @@ int g_max_size       = 1024;   // LiveryMod.ini [LiveryMod] Size: 256, 512 or 10
 
 constexpr uint32_t kIdBase  = 10000;  // our ids are kIdBase .. kIdBase + kIdRange - 1 (the game's own end at 3023)
 constexpr uint32_t kIdRange = 50000;
+constexpr uint32_t kIdMax   = 32767;  // the game keeps a decal id in 16 bits (signed): a bigger one is accepted by the menu but can't be placed
 constexpr int kSeqBase      = 1000;   // sort order after the game's own decals (they stop at 54)
 constexpr size_t kMaxFile   = 64u << 20;
 constexpr int kMaxDecals    = 400;
@@ -87,8 +88,8 @@ std::wstring lower(std::wstring s) {
     return s;
 }
 
-uint32_t fnv1a(const std::wstring& s) {
-    uint32_t h = 2166136261u;
+uint32_t fnv1a(const std::wstring& s, uint32_t salt = 0) {
+    uint32_t h = 2166136261u ^ (salt * 0x9E3779B1u);
     for (wchar_t c : s) {
         h = (h ^ (c & 0xFF)) * 16777619u;
         h = (h ^ ((c >> 8) & 0xFF)) * 16777619u;
@@ -168,8 +169,16 @@ void install() {
     // and the mods that load after this one are not kept waiting.
     std::vector<bool> used(kIdRange, false);
     for (Decal& d : list) {
-        uint32_t slot = fnv1a(lower(d.file)) % kIdRange;
-        while (used[slot]) slot = (slot + 1) % kIdRange;
+        // ids stay at or under kIdMax; a name whose first id is higher is hashed again (ids that were fine keep their value)
+        uint32_t slot = 0;
+        for (uint32_t salt = 0;; ++salt) {
+            slot = fnv1a(lower(d.file), salt) % kIdRange;
+            if (kIdBase + slot <= kIdMax && !used[slot]) break;
+            if (salt > 200) {  // (never in practice) scan for any free id
+                for (slot = 0; slot < kIdMax - kIdBase + 1 && used[slot]; ++slot) {}
+                break;
+            }
+        }
         used[slot] = true;
         d.id = kIdBase + slot;
         char n8[16];

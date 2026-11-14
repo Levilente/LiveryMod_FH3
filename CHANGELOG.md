@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.2
+- Decal ids stay at or under 32767: the game keeps a livery decal's id in 16 bits, and a decal with a bigger id showed in the menu but did nothing when picked. A decal that had such an id gets a new one (a saved livery that used it needs the decal put on again); every other decal keeps its id.
+
 ## 1.2.1
 - Starts much faster with many decals: the PNGs are converted on several threads at once (a few hundred decals took about a minute before). Together with platform 1.2.1 this keeps the mods that load after this one (Nitro System II, Universal Wheel Spacers) from registering late.
 
