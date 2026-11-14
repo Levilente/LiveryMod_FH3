@@ -21,8 +21,11 @@
 #include "../third_party/stb_image.h"
 
 #include "swatch.hpp"
+#include "missing_png.h"
 
 #include <algorithm>
+#include <map>
+#include <set>
 #include <atomic>
 #include <thread>
 #include <cstdarg>
@@ -216,6 +219,7 @@ void install() {
     const size_t chunk   = workers * 3;
 
     std::string sql;
+    std::vector<uint32_t> registered_ids;
     int ok = 0, seq = 0;
     for (size_t base = 0; base < list.size(); base += chunk) {
         const size_t n = std::min(chunk, list.size() - base);
@@ -247,8 +251,73 @@ void install() {
                           kSeqBase + seq, d.id, kSeqBase);
             sql += row;
             ++ok;
+            registered_ids.push_back(d.id);
             if (g_verbose) say("%s.png (%dx%d) -> decal %u (%s), texture %d", d.stem.c_str(), r.w, r.h, d.id, d.name8.c_str(), size);
         }
+    }
+
+    // Decals that were here once and are gone: a saved livery can still use them. Each keeps its id, in the database
+    // (but not in the menu) and shows the "missing sticker" picture instead of crashing or vanishing.
+    const std::wstring known_path = std::wstring(g_api->azimuth_dir) + L"\\fh3-mods\\LiveryMod-known.txt";
+    std::map<uint32_t, std::string> known;
+    {
+        std::vector<uint8_t> kb;
+        if (read_file(known_path, kb)) {
+            const std::string text(kb.begin(), kb.end());
+            size_t pos = 0;
+            while (pos < text.size()) {
+                size_t eol = text.find('\n', pos);
+                if (eol == std::string::npos) eol = text.size();
+                std::string line = text.substr(pos, eol - pos);
+                pos = eol + 1;
+                while (!line.empty() && (line.back() == '\r')) line.pop_back();
+                const size_t tab = line.find('\t');
+                if (tab == std::string::npos) continue;
+                const unsigned long id = std::strtoul(line.substr(0, tab).c_str(), nullptr, 10);
+                if (id >= kIdBase && id <= kIdMax) known[uint32_t(id)] = line.substr(tab + 1);
+            }
+        }
+    }
+    bool known_changed = false;
+    std::set<uint32_t> registered;
+    for (const Decal& d : list) {
+        auto it = known.find(d.id);
+        if (it == known.end() || it->second != d.stem) { known[d.id] = d.stem; known_changed = true; }
+    }
+    for (uint32_t id : registered_ids) registered.insert(id);
+    std::vector<uint32_t> missing;
+    for (const auto& kv : known)
+        if (!registered.count(kv.first)) missing.push_back(kv.first);
+    if (!missing.empty()) {
+        int w = 0, hgt = 0, comp = 0;
+        stbi_uc* px = stbi_load_from_memory(k_missing_png, int(sizeof k_missing_png), &w, &hgt, &comp, 4);
+        bool tex_ok = false;
+        if (px) {
+            const std::vector<uint8_t> tex = swatch::make_swatchbin(px, w, hgt, g_premultiplied, std::min(size, 512));
+            stbi_image_free(px);
+            tex_ok = g_api->set_file(g_mod, "livery/Decals/Textures/lmmissng.swatchbin", tex.data(), tex.size()) != 0;
+        }
+        if (tex_ok) {
+            const std::vector<uint8_t> mdl = swatch::make_modelbin("lmmissng");  // every missing decal's model points at this one texture
+            for (uint32_t id : missing) {
+                char n8[16];
+                std::snprintf(n8, sizeof n8, "lm%06u", id);
+                const std::string mdl_path = std::string("livery/Decals/") + n8 + ".modelbin";
+                if (!g_api->set_file(g_mod, mdl_path.c_str(), mdl.data(), mdl.size())) continue;
+                char row[640];
+                const std::string nm = sql_text("missing: " + known[id]);
+                std::snprintf(row, sizeof row, "INSERT INTO Livery_Decals (ID, Filename, DisplayName, AlphaSort) VALUES (%u, 'GAME:\\Media\\Livery\\Decals\\%s.modelbin', %s, %s);\n", id, n8, nm.c_str(), nm.c_str());
+                sql += row;
+            }
+            say("%zu decal(s) are gone from fh3-mods\\liverymod; a livery that uses one shows the missing sticker", missing.size());
+        } else {
+            say("the missing-sticker picture couldn't be set up");
+        }
+    }
+    if (known_changed) {
+        std::string out;
+        for (const auto& kv : known) out += std::to_string(kv.first) + "\t" + kv.second + "\r\n";
+        if (FILE* f = _wfopen(known_path.c_str(), L"wb")) { std::fwrite(out.data(), 1, out.size(), f); std::fclose(f); }
     }
     if (!sql.empty()) g_api->add_sql(g_mod, sql.c_str());
     if (g_verbose) say("%d decal(s) from fh3-mods\\liverymod", ok);
