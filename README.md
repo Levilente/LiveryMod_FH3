@@ -17,6 +17,7 @@ and its decal is gone from the menu on the next start.
   Transparency is kept.
 - A decal's id comes from its file name. Keep the name and the decal keeps its id, so liveries that use it keep working; rename the file
   and it becomes a different decal. Don't remove a PNG that a saved livery still uses.
+- A decal whose PNG you take out of `fh3-mods\liverymod` keeps its id in the game (listed in `fh3-mods\LiveryMod-known.txt`), not in the menu, and shows a "missing sticker" picture in saved liveries instead of a hole.
 - `fh3-mods\LiveryMod.ini`: `Size=256` gives the game's own size (use it if a big decal ever misbehaves); `Log=1` writes which PNG became which decal to `platform.log`; `Premultiplied=1` stores colours multiplied by
   alpha (try it if edges look dark or light in the game).
 

@@ -1,6 +1,7 @@
 # Changelog
 
 ## 1.3.0
+- Decal ids stay at or under 32767 (1.2.2): the game keeps a livery decal's id in 16 bits, and a decal with a bigger id showed in the menu but did nothing when picked. A decal that had such an id gets a new one (a saved livery that used it needs the decal put on again); every other decal keeps its id.
 - A decal whose PNG was taken out of `fh3-mods\\liverymod` no longer leaves a hole in saved liveries: the mod remembers every decal it has seen (`fh3-mods\\LiveryMod-known.txt`) and keeps the removed ones' ids in the game, not in the menu, showing a "missing sticker" picture.
 
 ## 1.2.2
